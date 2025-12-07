@@ -1,46 +1,58 @@
+import os
 import json
 import joblib
 import numpy as np
-import os
 
+model = None
 
 def init():
-    """
-    Called once when the service is started. Loads the trained model into memory.
-    Azure ML will call this function to initialise the endpoint.
-    """
+    """Load the model from the Azure ML model directory."""
     global model
-    # Determine which model file to load, defaulting to the random forest
-    model_file = os.getenv('MODEL_FILE', 'random_forest.joblib')
-    model_dir = os.getenv('AZUREML_MODEL_DIR', 'models')
-    model_path = os.path.join(model_dir, model_file)
+    # Azure sets AZUREML_MODEL_DIR to something like:
+    # /var/azureml-app/azureml-models/<model_name>/<version>
+    model_dir = os.getenv("AZUREML_MODEL_DIR", ".")
+    model_path = os.path.join(model_dir, "random_forest.joblib")
     model = joblib.load(model_path)
 
 
-def run(raw_data):
+def run(request):
     """
-    Makes a prediction using the trained model. Expects `raw_data` to be a JSON
-    string representing a dictionary of feature values. Returns the prediction as
-    a JSON-serialisable dict.
+    Azure ML may pass either:
+      - a JSON string, or
+      - a Python dict.
+
+    We handle both, and we accept either:
+      {"data": [ {feature dict} ]}  or  {feature dict}
     """
     try:
-        # Parse the input JSON string
-        data = json.loads(raw_data)
-        # Build feature array. Ensure keys match the feature columns used in training.
+        # If request is a JSON string, parse it
+        if isinstance(request, str):
+            payload = json.loads(request)
+        else:
+            payload = request
+
+        # Support both {"data":[{...}]} and just {...}
+        if "data" in payload:
+            row = payload["data"][0]
+        else:
+            row = payload
+
+        # Extract features in the SAME order used during training
         features = np.array([[
-            data['repo_duration_scaled'],
-            data['commits'],
-            data['branches'],
-            data['contributors'],
-            data['stars'],
-            data['issues'],
-            data['pullrequests'],
-            data['size'],
-            data['language_encoded']
+            row["repo_duration_scaled"],
+            row["commits"],
+            row["branches"],
+            row["contributors"],
+            row["stars"],
+            row["issues"],
+            row["pullrequests"],
+            row["size"],
+            row["language_encoded"],
         ]])
-        # Generate the prediction
-        prediction = model.predict(features)[0]
-        return {'prediction': int(prediction)}
+
+        pred = int(model.predict(features)[0])
+        return {"prediction": pred}
+
     except Exception as e:
-        # Return the error message to facilitate debugging
-        return {'error': str(e)}
+        # Return error string so it appears in logs / test UI
+        return {"error": str(e)}
